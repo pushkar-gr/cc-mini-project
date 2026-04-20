@@ -7,7 +7,21 @@
 #include <cstring>
 #include <sys/stat.h>
 
-static struct fuse_operations ops = {};
+static struct fuse_operations ops = {
+    .getattr  = fs_getattr,
+    .mkdir    = fs_mkdir,
+    .unlink   = fs_unlink,
+    .rmdir    = fs_rmdir,
+    .truncate = fs_truncate,
+    .open     = fs_open,
+    .read     = fs_read,
+    .write    = fs_write,
+    .release  = fs_release,
+    .readdir  = fs_readdir,
+    .create   = fs_create,
+    .utimens  = fs_utimens,
+    .chmod    = fs_chmod,
+};
 
 static void usage(const char* prog) {
     fprintf(stderr, "Usage: %s <lowerdir> <upperdir> <mountpoint> [FUSE options]\n", prog);
