@@ -41,3 +41,16 @@ std::string resolve_path(const char* fuse_path) {
 
     return "";
 }
+
+int fs_getattr(const char* path, struct stat* st) {
+    if (strcmp(path, "/") == 0) {
+        memset(st, 0, sizeof(*st));
+        st->st_mode  = S_IFDIR | 0755;
+        st->st_nlink = 2;
+        return 0;
+    }
+    std::string real = resolve_path(path);
+    if (real.empty()) return -ENOENT;
+    if (lstat(real.c_str(), st) == -1) return -errno;
+    return 0;
+}
