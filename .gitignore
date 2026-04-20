@@ -1,0 +1,8 @@
+bin/
+*.o
+*.out
+mnt/
+lower/
+upper/
+unionfs_test_env/
+**/.DS_Store
