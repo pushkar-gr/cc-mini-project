@@ -1,21 +1,21 @@
 #include "path.h"
 #include <cerrno>
 #include <cstring>
+#include <set>
+#include <string>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <utime.h>
+#include <fcntl.h>
 
-// resolve_path maps a FUSE path (e.g. "/dir/file") to the real OS path.
-// Resolution order:
-//   1. Whiteout in upper layer  -> return "" (deleted)
-//   2. File in upper layer      -> return upper path
-//   3. File in lower layer      -> return lower path
-//   4. Not found                -> return ""
 std::string resolve_path(const char* fuse_path) {
     State* s = get_state();
 
     if (strcmp(fuse_path, "/") == 0)
         return s->upper_dir;
 
-    std::string rel(fuse_path + 1);   // strip leading '/'
+    std::string rel(fuse_path + 1);
     size_t slash = rel.rfind('/');
     std::string name = (slash == std::string::npos) ? rel : rel.substr(slash + 1);
     std::string par  = (slash == std::string::npos) ? "" : rel.substr(0, slash);
@@ -23,18 +23,15 @@ std::string resolve_path(const char* fuse_path) {
     std::string upper_par = s->upper_dir + (par.empty() ? "" : "/" + par);
     std::string lower_par = s->lower_dir + (par.empty() ? "" : "/" + par);
 
-    // 1. Check for whiteout marker in upper layer.
     std::string wh = upper_par + "/" + WH_PREFIX + name;
     struct stat st;
     if (lstat(wh.c_str(), &st) == 0)
-        return "";   // entry is deleted
+        return "";
 
-    // 2. Upper layer.
     std::string up = upper_par + "/" + name;
     if (lstat(up.c_str(), &st) == 0)
         return up;
 
-    // 3. Lower layer.
     std::string lo = lower_par + "/" + name;
     if (lstat(lo.c_str(), &st) == 0)
         return lo;
@@ -52,5 +49,64 @@ int fs_getattr(const char* path, struct stat* st) {
     std::string real = resolve_path(path);
     if (real.empty()) return -ENOENT;
     if (lstat(real.c_str(), st) == -1) return -errno;
+    return 0;
+}
+
+int fs_readdir(const char* path, void* buf, fuse_fill_dir_t filler,
+               off_t offset, struct fuse_file_info* fi) {
+    State* s = get_state();
+    (void)offset; (void)fi;
+
+    filler(buf, ".",  NULL, 0);
+    filler(buf, "..", NULL, 0);
+
+    std::string upper_dir, lower_dir;
+    if (strcmp(path, "/") == 0) {
+        upper_dir = s->upper_dir;
+        lower_dir = s->lower_dir;
+    } else {
+        std::string rel(path + 1);
+        upper_dir = s->upper_dir + "/" + rel;
+        lower_dir = s->lower_dir + "/" + rel;
+    }
+
+    std::set<std::string> seen;
+
+    // Enumerate upper layer — skip whiteout marker files.
+    DIR* dp = opendir(upper_dir.c_str());
+    if (dp) {
+        struct dirent* de;
+        while ((de = readdir(dp))) {
+            std::string name = de->d_name;
+            if (name == "." || name == "..") continue;
+            if (name.size() > WH_PREFIX_LEN &&
+                name.compare(0, WH_PREFIX_LEN, WH_PREFIX) == 0)
+                continue;
+            seen.insert(name);
+            filler(buf, name.c_str(), NULL, 0);
+        }
+        closedir(dp);
+    }
+
+    // Enumerate lower layer — skip entries already seen or whited out.
+    dp = opendir(lower_dir.c_str());
+    if (dp) {
+        struct dirent* de;
+        while ((de = readdir(dp))) {
+            std::string name = de->d_name;
+            if (name == "." || name == "..") continue;
+            if (seen.count(name)) continue;
+
+            // Skip if a whiteout marker exists in upper.
+            std::string wh = upper_dir + "/" + WH_PREFIX + name;
+            struct stat st;
+            if (lstat(wh.c_str(), &st) == 0) continue;
+
+            seen.insert(name);
+            filler(buf, name.c_str(), NULL, 0);
+        }
+        closedir(dp);
+    }
+
     return 0;
 }
