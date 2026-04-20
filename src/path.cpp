@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <utime.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 std::string resolve_path(const char* fuse_path) {
     State* s = get_state();
@@ -108,5 +109,44 @@ int fs_readdir(const char* path, void* buf, fuse_fill_dir_t filler,
         closedir(dp);
     }
 
+    return 0;
+}
+
+int fs_read(const char* path, char* buf, size_t size, off_t offset,
+            struct fuse_file_info* fi) {
+    (void)path;
+    int n = pread((int)fi->fh, buf, size, offset);
+    return (n == -1) ? -errno : n;
+}
+
+int fs_release(const char* path, struct fuse_file_info* fi) {
+    (void)path;
+    if (fi->fh) close((int)fi->fh);
+    return 0;
+}
+
+int fs_utimens(const char* path, const struct timespec ts[2]) {
+    std::string real = resolve_path(path);
+    if (real.empty()) return -ENOENT;
+
+    // Only update timestamps on upper-layer files; lower is read-only.
+    State* s = get_state();
+    if (real.compare(0, s->upper_dir.size(), s->upper_dir) != 0)
+        return 0;
+
+    struct utimbuf times = { ts[0].tv_sec, ts[1].tv_sec };
+    if (utime(real.c_str(), &times) == -1) return -errno;
+    return 0;
+}
+
+int fs_chmod(const char* path, mode_t mode) {
+    std::string real = resolve_path(path);
+    if (real.empty()) return -ENOENT;
+
+    State* s = get_state();
+    if (real.compare(0, s->upper_dir.size(), s->upper_dir) != 0)
+        return 0;
+
+    if (chmod(real.c_str(), mode) == -1) return -errno;
     return 0;
 }
