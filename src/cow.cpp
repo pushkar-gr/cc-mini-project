@@ -57,3 +57,10 @@ int fs_open(const char* path, struct fuse_file_info* fi) {
     fi->fh = (uint64_t)fd;
     return 0;
 }
+
+int fs_write(const char* path, const char* buf, size_t size, off_t offset,
+             struct fuse_file_info* fi) {
+    (void)path;
+    int n = pwrite((int)fi->fh, buf, size, offset);
+    return (n == -1) ? -errno : n;
+}
