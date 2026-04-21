@@ -64,3 +64,54 @@ int fs_write(const char* path, const char* buf, size_t size, off_t offset,
     int n = pwrite((int)fi->fh, buf, size, offset);
     return (n == -1) ? -errno : n;
 }
+
+int fs_create(const char* path, mode_t mode, struct fuse_file_info* fi) {
+    State* s = get_state();
+    std::string rel(path + 1);
+    std::string upper_path = s->upper_dir + "/" + rel;
+
+    // Remove any stale whiteout so the new file becomes visible.
+    size_t slash = rel.rfind('/');
+    std::string udir = s->upper_dir + (slash != std::string::npos ? "/" + rel.substr(0, slash) : "");
+    std::string name = (slash != std::string::npos) ? rel.substr(slash + 1) : rel;
+    remove_whiteout(udir, name);
+
+    int fd = open(upper_path.c_str(), O_CREAT | O_RDWR | O_TRUNC, mode);
+    if (fd == -1) return -errno;
+
+    fi->fh = (uint64_t)fd;
+    return 0;
+}
+
+int fs_truncate(const char* path, off_t size) {
+    State* s = get_state();
+    std::string real = resolve_path(path);
+    if (real.empty()) return -ENOENT;
+
+    std::string rel(path + 1);
+    std::string upper_path = s->upper_dir + "/" + rel;
+
+    // Copy to upper before truncating if the file is in lower.
+    if (real != upper_path) {
+        int err = copy_to_upper(real, upper_path);
+        if (err != 0) return err;
+        real = upper_path;
+    }
+
+    if (truncate(real.c_str(), size) == -1) return -errno;
+    return 0;
+}
+
+int fs_mkdir(const char* path, mode_t mode) {
+    State* s = get_state();
+    std::string rel(path + 1);
+    std::string upper_path = s->upper_dir + "/" + rel;
+
+    size_t slash = rel.rfind('/');
+    std::string udir = s->upper_dir + (slash != std::string::npos ? "/" + rel.substr(0, slash) : "");
+    std::string name = (slash != std::string::npos) ? rel.substr(slash + 1) : rel;
+    remove_whiteout(udir, name);
+
+    if (mkdir(upper_path.c_str(), mode) == -1) return -errno;
+    return 0;
+}
