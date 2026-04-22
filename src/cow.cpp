@@ -7,6 +7,37 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static int ensure_upper_dirs(const std::string& rel) {
+    State* s = get_state();
+    size_t pos = 0;
+
+    while ((pos = rel.find('/', pos)) != std::string::npos) {
+        std::string part = rel.substr(0, pos);
+        if (part.empty()) {
+            pos++;
+            continue;
+        }
+
+        std::string udir = s->upper_dir + "/" + part;
+        struct stat st;
+
+        if (stat(udir.c_str(), &st) == -1) {
+            mode_t mode = 0755; // Default fallback mode
+
+            std::string ldir = s->lower_dir + "/" + part;
+            if (stat(ldir.c_str(), &st) == 0) {
+                mode = st.st_mode;
+            }
+
+            if (mkdir(udir.c_str(), mode) == -1 && errno != EEXIST) {
+                return -errno;
+            }
+        }
+        pos++;
+    }
+    return 0;
+}
+
 // copy_to_upper copies a file from src (lower layer) to dst (upper layer),
 // preserving its permissions. Used to implement Copy-on-Write.
 int copy_to_upper(const std::string& src, const std::string& dst) {
@@ -51,7 +82,10 @@ int fs_open(const char* path, struct fuse_file_info* fi) {
     // layer, copy it to the upper layer before opening.
     bool write_access = (fi->flags & (O_WRONLY | O_RDWR | O_APPEND)) != 0;
     if (write_access && real != upper_path) {
-        int err = copy_to_upper(real, upper_path);
+        int err = ensure_upper_dirs(rel);
+        if (err != 0) return err;
+
+        err = copy_to_upper(real, upper_path);
         if (err != 0) return err;
         real = upper_path;
     }
@@ -74,6 +108,9 @@ int fs_create(const char* path, mode_t mode, struct fuse_file_info* fi) {
     State* s = get_state();
     std::string rel(path + 1);
     std::string upper_path = s->upper_dir + "/" + rel;
+
+    int err = ensure_upper_dirs(rel);
+    if (err != 0) return err;
 
     // Remove any stale whiteout so the new file becomes visible.
     size_t slash = rel.rfind('/');
@@ -98,7 +135,10 @@ int fs_truncate(const char* path, off_t size) {
 
     // Copy to upper before truncating if the file is in lower.
     if (real != upper_path) {
-        int err = copy_to_upper(real, upper_path);
+        int err = ensure_upper_dirs(rel);
+        if (err != 0) return err;
+
+        err = copy_to_upper(real, upper_path);
         if (err != 0) return err;
         real = upper_path;
     }
@@ -111,6 +151,10 @@ int fs_mkdir(const char* path, mode_t mode) {
     State* s = get_state();
     std::string rel(path + 1);
     std::string upper_path = s->upper_dir + "/" + rel;
+
+    // Ensure parent directories exist before making the new directory
+    int err = ensure_upper_dirs(rel);
+    if (err != 0) return err;
 
     size_t slash = rel.rfind('/');
     std::string udir = s->upper_dir + (slash != std::string::npos ? "/" + rel.substr(0, slash) : "");

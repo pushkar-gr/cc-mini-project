@@ -1,5 +1,6 @@
 #include "whiteout.h"
 #include <cerrno>
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -38,6 +39,37 @@ static void split_upper(const char* fuse_path,
         upper_par = s->upper_dir + "/" + rel.substr(0, slash);
         name = rel.substr(slash + 1);
     }
+}
+
+static int ensure_upper_par(const std::string& rel) {
+    State* s = get_state();
+    size_t slash = rel.rfind('/');
+    if (slash == std::string::npos)
+        return 0;
+
+    std::string par_rel = rel.substr(0, slash);
+    size_t pos = 0;
+    while (pos <= par_rel.size()) {
+        size_t next = par_rel.find('/', pos);
+        std::string part = (next == std::string::npos)
+                               ? par_rel
+                               : par_rel.substr(0, next);
+        if (!part.empty()) {
+            std::string udir = s->upper_dir + "/" + part;
+            struct stat st;
+            if (stat(udir.c_str(), &st) == -1) {
+                mode_t mode = 0755;
+                std::string ldir = s->lower_dir + "/" + part;
+                if (stat(ldir.c_str(), &st) == 0)
+                    mode = st.st_mode;
+                if (mkdir(udir.c_str(), mode) == -1 && errno != EEXIST)
+                    return -errno;
+            }
+        }
+        if (next == std::string::npos) break;
+        pos = next + 1;
+    }
+    return 0;
 }
 
 int fs_unlink(const char* path) {
@@ -92,13 +124,57 @@ int fs_rmdir(const char* path) {
     if (!in_upper && !in_lower) return -ENOENT;
 
     if (in_upper) {
-        if (rmdir(upper_path.c_str()) == -1) {
-            if (errno == ENOTEMPTY) return -ENOTEMPTY;
-            return -errno;
+        DIR* dp = opendir(upper_path.c_str());
+        if (dp) {
+            struct dirent* de;
+            while ((de = readdir(dp))) {
+                std::string n = de->d_name;
+                if (n == "." || n == "..") continue;
+                if (n.size() > WH_PREFIX_LEN &&
+                    n.compare(0, WH_PREFIX_LEN, WH_PREFIX) == 0)
+                    continue; // whiteout marker, not a real entry
+                closedir(dp);
+                return -ENOTEMPTY;
+            }
+            closedir(dp);
         }
     }
 
+    // Lower scan: any entry not covered by a whiteout in upper means non-empty.
     if (in_lower) {
+        DIR* dp = opendir(lower_path.c_str());
+        if (dp) {
+            struct dirent* de;
+            while ((de = readdir(dp))) {
+                std::string n = de->d_name;
+                if (n == "." || n == "..") continue;
+                std::string wh = upper_path + "/" + WH_PREFIX + n;
+                if (lstat(wh.c_str(), &st) == 0) continue; // covered by whiteout
+                closedir(dp);
+                return -ENOTEMPTY;
+            }
+            closedir(dp);
+        }
+    }
+
+    if (in_upper) {
+        DIR* dp = opendir(upper_path.c_str());
+        if (dp) {
+            struct dirent* de;
+            while ((de = readdir(dp))) {
+                std::string n = de->d_name;
+                if (n == "." || n == "..") continue;
+                std::string entry = upper_path + "/" + n;
+                unlink(entry.c_str());
+            }
+            closedir(dp);
+        }
+        if (rmdir(upper_path.c_str()) == -1) return -errno;
+    }
+
+    if (in_lower) {
+        int err = ensure_upper_par(rel);
+        if (err != 0) return err;
         if (create_whiteout(upper_par, name) != 0) return -EIO;
     }
 
