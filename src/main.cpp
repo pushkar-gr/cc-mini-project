@@ -2,6 +2,8 @@
 #include "path.h"
 #include "cow.h"
 #include "whiteout.h"
+#include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +14,7 @@ static struct fuse_operations ops = {
     .mkdir    = fs_mkdir,
     .unlink   = fs_unlink,
     .rmdir    = fs_rmdir,
+    .chmod    = fs_chmod,
     .truncate = fs_truncate,
     .open     = fs_open,
     .read     = fs_read,
@@ -20,7 +23,6 @@ static struct fuse_operations ops = {
     .readdir  = fs_readdir,
     .create   = fs_create,
     .utimens  = fs_utimens,
-    .chmod    = fs_chmod,
 };
 
 static void usage(const char* prog) {
@@ -34,8 +36,21 @@ int main(int argc, char* argv[]) {
     }
 
     State* state = new State();
-    state->lower_dir = argv[1];
-    state->upper_dir = argv[2];
+
+    // Resolve to absolute paths before FUSE daemonizes and changes CWD to "/".
+    char lower_abs[PATH_MAX], upper_abs[PATH_MAX];
+    if (!realpath(argv[1], lower_abs)) {
+        fprintf(stderr, "Error: cannot resolve '%s': %s\n", argv[1], strerror(errno));
+        delete state;
+        return 1;
+    }
+    if (!realpath(argv[2], upper_abs)) {
+        fprintf(stderr, "Error: cannot resolve '%s': %s\n", argv[2], strerror(errno));
+        delete state;
+        return 1;
+    }
+    state->lower_dir = lower_abs;
+    state->upper_dir = upper_abs;
 
     // Validate that both directories exist.
     struct stat st;

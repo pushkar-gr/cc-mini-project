@@ -17,3 +17,5 @@ struct State {
 inline State* get_state() {
     return static_cast<State*>(fuse_get_context()->private_data);
 }
+
+inline int fh_to_fd(uint64_t fh) { return static_cast<int>(fh); }

@@ -22,9 +22,14 @@ int copy_to_upper(const std::string& src, const std::string& dst) {
     char buf[4096];
     ssize_t n;
     while ((n = read(src_fd, buf, sizeof(buf))) > 0) {
-        if (write(dst_fd, buf, (size_t)n) != n) {
-            close(src_fd); close(dst_fd);
-            return -EIO;
+        ssize_t written = 0;
+        while (written < n) {
+            ssize_t w = write(dst_fd, buf + written, (size_t)(n - written));
+            if (w == -1) {
+                close(src_fd); close(dst_fd);
+                return -errno;
+            }
+            written += w;
         }
     }
 
@@ -61,7 +66,7 @@ int fs_open(const char* path, struct fuse_file_info* fi) {
 int fs_write(const char* path, const char* buf, size_t size, off_t offset,
              struct fuse_file_info* fi) {
     (void)path;
-    int n = pwrite((int)fi->fh, buf, size, offset);
+    int n = pwrite(fh_to_fd(fi->fh), buf, size, offset);
     return (n == -1) ? -errno : n;
 }
 
