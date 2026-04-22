@@ -70,3 +70,37 @@ int fs_unlink(const char* path) {
 
     return 0;
 }
+
+int fs_rmdir(const char* path) {
+    State* s = get_state();
+    std::string rel(path + 1);
+
+    std::string upper_par, name;
+    split_upper(path, upper_par, name);
+
+    std::string upper_path = upper_par + "/" + name;
+
+    size_t slash = rel.rfind('/');
+    std::string lower_par = s->lower_dir +
+        (slash != std::string::npos ? "/" + rel.substr(0, slash) : "");
+    std::string lower_path = lower_par + "/" + name;
+
+    struct stat st;
+    bool in_upper = (lstat(upper_path.c_str(), &st) == 0);
+    bool in_lower = (lstat(lower_path.c_str(), &st) == 0);
+
+    if (!in_upper && !in_lower) return -ENOENT;
+
+    if (in_upper) {
+        if (rmdir(upper_path.c_str()) == -1) {
+            if (errno == ENOTEMPTY) return -ENOTEMPTY;
+            return -errno;
+        }
+    }
+
+    if (in_lower) {
+        if (create_whiteout(upper_par, name) != 0) return -EIO;
+    }
+
+    return 0;
+}
